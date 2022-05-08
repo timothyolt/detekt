@@ -1,0 +1,30 @@
+name: Gradle Enterprise Trail
+
+on:
+  pull_request:
+    branches:
+      - '**'
+
+env:
+  GRADLE_ENTERPRISE_ACCESS_KEY: ${{ secrets.GRADLE_ENTERPRISE_ACCESS_KEY }}
+  GRADLE_CACHE_USERNAME: ${{ secrets.GRADLE_CACHE_USERNAME }}
+  GRADLE_CACHE_PASSWORD: ${{ secrets.GRADLE_CACHE_PASSWORD }}
+
+permissions:
+  contents: read
+
+jobs:
+  gradle:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          java-version: 11
+          distribution: 'temurin'
+      - name: Build detekt
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: clean build -Dscan.tag.exp4
