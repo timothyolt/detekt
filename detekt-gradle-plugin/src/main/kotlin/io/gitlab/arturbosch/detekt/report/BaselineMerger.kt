@@ -1,5 +1,6 @@
 package io.gitlab.arturbosch.detekt.report
 
+import org.w3c.dom.NamedNodeMap
 import org.w3c.dom.Node
 import org.w3c.dom.NodeList
 import java.io.File
@@ -49,7 +50,13 @@ object BaselineMerger {
 
 }
 
-private fun NodeList.asSequence() = sequence {
+fun NodeList.asSequence() = sequence {
+    for (index in 0 until length) {
+        yield(item(index))
+    }
+}
+
+fun NamedNodeMap.asSequence() = sequence {
     for (index in 0 until length) {
         yield(item(index))
     }
