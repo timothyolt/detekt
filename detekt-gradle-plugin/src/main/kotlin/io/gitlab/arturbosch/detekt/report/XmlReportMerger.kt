@@ -1,7 +1,6 @@
 package io.gitlab.arturbosch.detekt.report
 
 import org.w3c.dom.Node
-import org.w3c.dom.NodeList
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.transform.OutputKeys
@@ -17,93 +16,39 @@ object XmlReportMerger {
     private val documentBuilder by lazy { DocumentBuilderFactory.newInstance().newDocumentBuilder() }
 
     fun merge(xmlFiles: Collection<File>, output: File) {
-        val document = documentBuilder.newDocument().apply {
+        val mergedDocument = documentBuilder.newDocument().apply {
             xmlStandalone = true
         }
-        val checkstyleNode = document.createElement("checkstyle")
-        checkstyleNode.setAttribute("version", "4.3")
-        document.appendChild(checkstyleNode)
+        val mergedCheckstyleNode = mergedDocument.createElement("checkstyle")
+        mergedCheckstyleNode.setAttribute("version", "4.3")
+        mergedDocument.appendChild(mergedDocument.createElement("checkstyle"))
 
-        class NodeEquality(val node: Node) {
-            override fun equals(other: Any?): Boolean =
-                ((other as? NodeEquality)?.node?.isEqualNode(node) == true) && check(node == other.node).let { true }
-
-            override fun hashCode(): Int {
-                return node.hashCode()
-            }
-        }
-
-        /*
-
-            .reduce { key, accumulator, nodes ->
-                nodes.childNodes.asSequence().filterWhitespace()
-
-                nodes.flatMap { it.childNodes.asSequence().filterWhitespace() }.distinctBy {
-                    Triple(
-                        it.attributes?.getNamedItem("line")?.nodeValue,
-                        it.attributes?.getNamedItem("column")?.nodeValue,
-                        it.attributes?.getNamedItem("source")?.nodeValue
-                    )
-                }
-            }
-         */
-        data class SmellID(
-            val fileName: String,
-            val line: String,
-            val column: String,
-            val source: String
-        )
-
-        fun smellID(
-            fileName: String,
-            line: String?,
-            column: String?,
-            source: String?
-        ): SmellID? {
-            return SmellID(
-                fileName = fileName,
-                line = line ?: return null,
-                column = column ?: return null,
-                source = source ?: return null
-            )
-        }
-
-        data class CheckstyleFileNode(
-            val id: Any,
-            val fileName: String,
-            val errorNode: Node
-        )
-
-        xmlFiles.asSequence()
+        xmlFiles
             .filter { xmlFile -> xmlFile.exists() }
             .flatMap { existingXmlFile ->
-                documentBuilder
-                    .parse(existingXmlFile.inputStream()) // <checkstyle>
-                    .documentElement.childNodes.asSequence().filterWhitespace()  // sequence of <file>
+                val checkstyleNode = documentBuilder.parse(existingXmlFile.inputStream())
+                val fileNodes = checkstyleNode.documentElement.childNodes.asSequence().filterWhitespace()
+                fileNodes
             }
             .flatMap { fileNode ->
-                val fileName = fileNode.attributes.getNamedItem("name").nodeValue  // <file>
-                fileNode.childNodes.asSequence().filterWhitespace().map { errorNode ->  // sequence of <error>
-                    CheckstyleFileNode(
-                        id = smellID(
-                            fileName,
-                            errorNode.attributes.getNamedItem("line")?.nodeValue,
-                            errorNode.attributes.getNamedItem("column")?.nodeValue,
-                            errorNode.attributes.getNamedItem("source")?.nodeValue
-                        ) ?: errorNode,
-                        fileName = fileName,
+                val fileNameAttribute = fileNode.attributes.getNamedItem("name").nodeValue
+                val errorNodes = fileNode.childNodes.asSequence().filterWhitespace()
+                errorNodes.map { errorNode ->
+                    CheckstyleErrorNodeWithFileData(
+                        errorID = errorID(fileNameAttribute, errorNode),
+                        fileName = fileNameAttribute,
                         errorNode = errorNode
                     )
                 }
             }
-            .distinctBy { it.id }
+            .distinctBy { it.errorID }
             .groupBy({ it.fileName }, { it.errorNode })
             .forEach { (fileName, errorNodes) ->
-                checkstyleNode.appendChild(
-                    document.createElement("file").apply {
+                mergedCheckstyleNode.appendChild(
+                    mergedDocument.createElement("file").apply {
                         setAttribute("name", fileName)
                         errorNodes.forEach {
-                            appendChild(document.importNode(it, true))
+                            appendChild(mergedDocument.importNode(it, true))
                         }
                     }
                 )
@@ -112,17 +57,40 @@ object XmlReportMerger {
         TransformerFactory.newInstance().newTransformer().run {
             setOutputProperty(OutputKeys.INDENT, "yes")
             setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2")
-            transform(DOMSource(document), StreamResult(output.writer()))
+            transform(DOMSource(mergedDocument), StreamResult(output.writer()))
+        }
+    }
+
+    private class CheckstyleErrorNodeWithFileData(
+        val errorID: Any,
+        val fileName: String,
+        val errorNode: Node
+    )
+
+    private data class ErrorID(
+        val fileName: String,
+        val line: String,
+        val column: String,
+        val source: String
+    )
+
+    private fun errorID(fileNameAttribute: String, errorNode: Node): Any {
+        val line = errorNode.attributes.getNamedItem("line")?.nodeValue
+        val column = errorNode.attributes.getNamedItem("column")?.nodeValue
+        val source = errorNode.attributes.getNamedItem("source")?.nodeValue
+
+        return if (line != null && column != null && source != null) {
+            ErrorID(fileName = fileNameAttribute, line = line, column = column, source = source)
+        } else {
+            // if the error node does not contain the expected attributes,
+            // use org.w3c.dom.Node's more strict hashCode/equals method to determine error uniqueness
+            errorNode
         }
     }
 
     /**
      * Use code instead of XSLT to exclude whitespaces.
      */
-    private fun NodeList.filterWhitespace(): Sequence<Node> = asSequence().filterNot {
-        it.nodeType == Node.TEXT_NODE && it.textContent.isBlank()
-    }
-
     private fun Sequence<Node>.filterWhitespace(): Sequence<Node> = asSequence().filterNot {
         it.nodeType == Node.TEXT_NODE && it.textContent.isBlank()
     }
